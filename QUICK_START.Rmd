@@ -80,7 +80,7 @@ list.files("data/")
 # ローカルからプッシュ
 git add .
 git commit -m "Initial commit: Complete handson materials"
-git remote add origin https://github.com/YOUR_USERNAME/nlmixr2-handson.git
+git remote add origin https://github.com/yoshihirokuroki/pop-pk-modeling-simulation-hands-on.git
 git branch -M main
 git push -u origin main
 ```
@@ -91,7 +91,7 @@ git push -u origin main
 
 1.  [posit.cloud](https://posit.cloud)にログイン
 2.  **New Project** → **New Project from Git Repository**
-3.  URL: `https://github.com/YOUR_USERNAME/nlmixr2-handson`
+3.  URL: <https://github.com/yoshihirokuroki/pop-pk-modeling-simulation-hands-on.git>
 4.  プロジェクトが開いたら、Consoleで：
 
 ``` r
@@ -170,7 +170,7 @@ https://posit.cloud/content/YOUR_PROJECT_ID
 または
 
 GitHubリポジトリ:
-https://github.com/YOUR_USERNAME/nlmixr2-handson
+https://github.com/YOUR-USERNAME/pop-pk-modeling-simulation-hands-on.git
 
 【手順】
 1. 上記リンクにアクセス
