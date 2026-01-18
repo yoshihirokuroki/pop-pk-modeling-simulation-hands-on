@@ -1,0 +1,678 @@
+---
+title: "nlmixr2による母集団薬物動態解析ハンズオン"
+subtitle: "抗体医薬品の2コンパートメントモデル構築"
+format: html
+editor: visual
+---
+
+# はじめに
+
+このハンズオンでは、架空の抗体医薬品（抗悪性腫瘍薬）の母集団薬物動態解析を体験します。
+
+**投与レジメン**: 800 mg、1時間持続静脈内投与、3週間ごと、6サイクル
+
+**データ**: 24名の被験者、rich PK sampling（サイクル1, 6）、sparse sampling（サイクル2-5）
+
+## パッケージ読み込み
+
+```{r setup, message=FALSE, warning=FALSE}
+library(nlmixr2)
+library(rxode2)
+library(dplyr)
+library(ggplot2)
+library(GGally)
+library(patchwork)
+library(xpose.nlmixr2)
+
+# 日本語フォント設定（必要に応じて）
+theme_set(theme_bw(base_size = 12))
+```
+
+------------------------------------------------------------------------
+
+# 1. データ読み込みと確認
+
+## データ読み込み
+
+```{r load-data}
+pk_data <- read.csv("data/pk_data.csv")
+
+# データ構造確認
+str(pk_data)
+head(pk_data, 20)
+```
+
+## データ要約
+
+```{r data-summary}
+# 被験者ごとの共変量確認
+covariates <- pk_data %>%
+  # filter(TIME == 0) %>%
+  filter(TIME == 0 & EVID == 1) %>%
+  select(ID, SEX, AGE, WT, ALB, TUMOR)
+
+summary(covariates)
+table(covariates$SEX)
+
+# 観測データ数
+cat("総観測数:", sum(pk_data$EVID == 0), "\n")
+cat("BLQ数:", sum(pk_data$BLQ == 1, na.rm = TRUE), "\n")
+cat("定量可能観測数:", sum(pk_data$EVID == 0 & pk_data$BLQ == 0), "\n")
+```
+
+------------------------------------------------------------------------
+
+# 2. データ可視化
+
+## 血中濃度-時間曲線（個別プロット）
+
+```{r conc-time-plot, fig.width=10, fig.height=8}
+# BLQを除外して可視化
+obs_data <- pk_data %>%
+  filter(EVID == 0, BLQ == 0)
+
+obs_plot <- ggplot(obs_data, aes(x = TIME/24, y = DV, group = ID, color = SEX)) +
+  geom_line(alpha = 0.6) +
+  geom_point(size = 1.5) +
+  scale_y_log10() +
+  scale_color_manual(values = c("Male" = "steelblue", "Female" = "coral")) +
+  labs(
+    x = "Time (Day)",
+    y = expression(paste("Concentration (", mu, "g/mL)")),
+    color = "Sex",
+    title = "Individual concentration - time profiles"
+  ) +
+  theme(legend.position = "top")
+
+obs_plot + ggplot2:::limits(lims = c(0, 21), var = "x")
+
+print(obs_plot)
+
+```
+
+## 共変量の相関マトリックス
+
+```{r covariate-matrix, fig.width=10, fig.height=8, message=FALSE, warning=FALSE}
+# 共変量のみ抽出
+cov_plot_data <- covariates %>%
+  select(AGE, WT, ALB, TUMOR, SEX)
+
+# ペアプロット
+ggpairs(
+  cov_plot_data,
+  aes(color = SEX, alpha = 0.6),
+  upper = list(continuous = wrap("cor", size = 3)),
+  lower = list(continuous = wrap("points", alpha = 0.5)),
+  diag = list(continuous = wrap("densityDiag", alpha = 0.5)),
+  # title = "共変量の相関マトリックス"
+  title = "Pairwise correlation matrix of covariates"
+) +
+  scale_color_manual(values = c("Male" = "steelblue", "Female" = "coral")) +
+  scale_fill_manual(values = c("Male" = "steelblue", "Female" = "coral"))
+```
+
+**観察ポイント**:
+
+-   体重と性別の相関（男性の方が重い）
+-   アルブミンと腫瘍径の負の相関（腫瘍が大きいとアルブミンが低い）
+
+------------------------------------------------------------------------
+
+# 3. ベースモデルの構築
+
+## 3.1 1コンパートメントモデル
+
+```{r model-1cpt}
+# 1コンパートメントモデル定義
+model_1cpt <- function() {
+  ini({
+    # 典型値
+    tcl <- log(0.25)
+    tv <- log(3.5)
+    
+    # 個体間変動
+    eta.cl ~ 0.1
+    eta.v ~ 0.1
+    
+    # 残差誤差（比例誤差）
+    prop.err <- 0.2
+  })
+  
+  model({
+    cl <- exp(tcl + eta.cl)
+    v <- exp(tv + eta.v)
+    
+    # 微分方程式
+    d/dt(central) = -cl/v * central
+    
+    # 血中濃度
+    cp = central/v
+    
+    # 観測モデル（比例誤差）
+    cp ~ prop(prop.err)
+    # BLQ 尤度（M3）
+    # cp ~ prop(prop.err) | cens(LLOQ)
+  })
+}
+
+# フィッティング（SAEM法）
+cat("1コンパートメントモデルをフィッティング中...\n")
+fit_1cpt <- nlmixr2(
+  model_1cpt,
+  data = pk_data,
+  est = "saem",
+  limit = list(censor = "left"),
+  control = saemControl(
+    nBurn = 200,
+    nEm = 300,
+    print = 50
+  )
+)
+
+# 結果表示
+print(fit_1cpt$parFixed)
+print(fit_1cpt$objf)
+```
+
+## 3.2 2コンパートメントモデル
+
+```{r model-2cpt}
+# 2コンパートメントモデル定義
+model_2cpt <- function() {
+  ini({
+    # 典型値
+    tcl <- log(0.2)
+    tv1 <- log(3.0)
+    tq <- log(0.15)
+    tv2 <- log(4.5)
+    
+    # 個体間変動
+    eta.cl ~ 0.1
+    eta.v1 ~ 0.3
+    eta.q ~ 0.4
+    eta.v2 ~ 0.3
+    
+    # 残差誤差
+    prop.err <- 0.2
+  })
+  
+  model({
+    cl <- exp(tcl + eta.cl)
+    v1 <- exp(tv1 + eta.v1)
+    q <- exp(tq + eta.q)
+    v2 <- exp(tv2 + eta.v2)
+    
+    # 微分方程式
+    d/dt(central) = -cl/v1 * central - q/v1 * central + q/v2 * peripheral
+    d/dt(peripheral) = q/v1 * central - q/v2 * peripheral
+    
+    # 血中濃度
+    cp = central/v1
+    
+    # 観測モデル
+    cp ~ prop(prop.err)
+  })
+}
+
+# フィッティング
+cat("2コンパートメントモデルをフィッティング中...\n")
+fit_2cpt <- nlmixr2(
+  model_2cpt,
+  data = pk_data,
+  est = "saem",
+  limit = list(censor = "left"),
+  control = saemControl(
+    nBurn = 200,
+    nEm = 300,
+    print = 50
+  )
+)
+
+print(fit_2cpt$parFixed)
+print(fit_2cpt$objf)
+```
+
+## 3.3 モデル比較
+
+```{r model-comparison}
+# AIC比較
+aic_1cpt <- AIC(fit_1cpt)
+aic_2cpt <- AIC(fit_2cpt)
+
+cat("\n=== モデル比較 ===\n")
+cat("1コンパートメント AIC:", round(aic_1cpt, 1), "\n")
+cat("2コンパートメント AIC:", round(aic_2cpt, 1), "\n")
+cat("ΔAIC:", round(aic_2cpt - aic_1cpt, 1), "\n")
+
+if(aic_2cpt < aic_1cpt) {
+  cat("\n結論: 2コンパートメントモデルが優れています\n")
+} else {
+  cat("\n結論: 1コンパートメントモデルが優れています\n")
+}
+```
+
+## 3.4 診断プロット（2コンパートメントモデル）
+
+```{r diagnostic-base, fig.width=10, fig.height=8}
+# 基本診断プロット
+# plot(fit_2cpt)
+xpbase <- xpose_data_nlmixr2(fit_2cpt, xp_theme = theme_xp_nlmixr2())
+prm_vs_iteration(xpbase) # トレースプロット（SAEM法によるパラメータ推定が収束しているか）
+dv_vs_pred(xpbase, type = "ps") # 観測値と母集団モデルによる中心推定値の一致
+dv_vs_ipred(xpbase, type = "ps") # 観測値と母集団モデルによる個別推定値の一致
+res_vs_idv(xpbase, type = "ps") # モデル中心推定値と観測値の差の分布の経時的なバイアスの有無
+res_vs_pred(xpbase, res = "CWRES", type = "ps") #モデル中心推定値と観測値の差の分布 
+res_vs_pred(xpbase, res = "IWRES", type = "ps") #モデル個別推定値と観測値の差の分布
+eta_distrib(xpbase, type = "hd") #パラメータ推定値の個体間差の分布（ヒストグラム）
+eta_qq(xpbase) #パラメータ推定値の個体間差の分布（QQプロット）
+ind_plots(xpbase, log = 'y') #観測値とモデル推定値の比較
+
+```
+
+**評価ポイント**:
+
+-   観測値 vs 予測値: 45度線に沿っているか
+-   残差プロット: ランダムに散らばっているか、系統的なバイアスがないか
+-   QQプロット: 正規性の確認
+
+------------------------------------------------------------------------
+
+# 4. 共変量モデルの構築
+
+## 4.1 パラメータと共変量の相関探索
+
+```{r eta-covariate-plot, fig.width=10, fig.height=6}
+# ペアプロット
+cov_explore <- fit_2cpt$eta %>% left_join(covariates %>% mutate(ID = as.factor(ID)))
+
+ggpairs(
+  cov_explore %>% select(!ID),
+  aes(color = SEX, alpha = 0.6),
+  upper = list(continuous = wrap("cor", size = 3)),
+  lower = list(continuous = wrap("points", alpha = 0.5)),
+  diag = list(continuous = wrap("densityDiag", alpha = 0.5)),
+  progress = FALSE,
+  # cardinality_threshold = 16,
+  # title = "共変量の相関マトリックス"
+  title = "Pairwise correlation matrix of covariates and etas"
+) +
+  scale_color_manual(values = c("Male" = "steelblue", "Female" = "coral")) +
+  scale_fill_manual(values = c("Male" = "steelblue", "Female" = "coral"))
+# 個体パラメータ（ETA）と共変量の関係
+eta_data <- as.data.frame(fit_2cpt$eta) %>%
+  mutate(ID = 1:n()) %>%
+  left_join(covariates, by = "ID")
+
+# CLのETAと共変量
+p1 <- ggplot(eta_data, aes(x = WT, y = eta.cl)) +
+  geom_point(aes(color = SEX), size = 3) +
+  geom_smooth(method = "loess", se = T) +
+  # labs(x = "体重（kg）", y = "η(CL)", title = "CLと体重")
+  labs(x = "Weight (kg)", y = expression(eta * "(CL)"), title = "CL and Weight")
+
+p2 <- ggplot(eta_data, aes(x = ALB, y = eta.cl)) +
+  geom_point(aes(color = SEX), size = 3) +
+  geom_smooth(method = "loess", se = T) +
+  # labs(x = "アルブミン（g/dL）", y = "η(CL)", title = "CLとアルブミン")
+  labs(x = "Albumin", y = expression(eta * "(CL)"), title = "CL and Albumin")
+
+p3 <- ggplot(eta_data, aes(x = TUMOR, y = eta.cl)) +
+  geom_point(aes(color = SEX), size = 3) +
+  geom_smooth(method = "loess", se = T) +
+  # geom_boxplot() +
+  # labs(x = "性別", y = "η(CL)", title = "CLと性別")
+  labs(x = "Baseline tumor diameter (mm)", y = expression(eta * "(CL)"), title = "CL and Baseline tumor diameter")
+
+p1 + p2 + p3 + plot_layout(ncol = 2)
+```
+
+**観察ポイント**: 体重とアルブミンがCLに影響している可能性が高い
+
+## 4.2 共変量モデル1: アルブミンのみ
+
+```{r model-cov-alb}
+model_cov_alb <- function() {
+  ini({
+    tcl <- log(c(0.05, 0.2, 0.5))
+    tv1 <- log(c(0.3, 3.0, 10.0))
+    tq <- log(c(0.01, 0.15, 0.5))
+    tv2 <- log(c(0.5, 4.5, 15.0))
+
+    # 共変量効果（アルブミン）
+    theta_alb_cl <- c(-2.5, -1.2, -0.1)  # アルブミンの効果（負の値を期待）
+
+    eta.cl ~ 0.1
+    eta.v1 ~ 0.3
+    eta.q ~ 0.4
+    eta.v2 ~ 0.3
+
+    prop.err <- 0.2
+  })
+
+  model({
+    # アルブミンによる共変量効果
+    cl <- exp(tcl) * (ALB/4.0)^theta_alb_cl * exp(eta.cl)
+    v1 <- exp(tv1 + eta.v1)
+    q <- exp(tq + eta.q)
+    v2 <- exp(tv2 + eta.v2)
+
+    d/dt(central) = -cl/v1 * central - q/v1 * central + q/v2 * peripheral
+    d/dt(peripheral) = q/v1 * central - q/v2 * peripheral
+
+    cp = central/v1
+    cp ~ prop(prop.err)
+  })
+}
+
+cat("体重共変量モデルをフィッティング中...\n")
+fit_cov_alb <- nlmixr2(
+  model_cov_alb,
+  data = pk_data,
+  est = "saem",
+  limit = list(censor = "left"),
+  control = saemControl(nBurn = 200, nEm = 300, print = 50)
+)
+
+print(fit_cov_alb$parFixed)
+print(fit_cov_alb$objf)
+AIC(fit_cov_alb)
+```
+
+## 4.3 共変量モデル2: 体重 + アルブミン
+
+```{r model-cov-wt-alb}
+model_cov_wt_alb <- function() {
+  ini({
+    tcl <- log(c(0.05, 0.2, 0.5))
+    tv1 <- log(c(0.3, 3.0, 10.0))
+    tq <- log(c(0.01, 0.15, 0.5))
+    tv2 <- log(c(0.5, 4.5, 15.0))
+    
+    # 共変量効果
+    theta_wt_cl <- c(0.01, 0.3, 0.5) # 体重の効果
+    theta_alb_cl <- c(-2.5, -1.2, -0.1)  # アルブミンの効果（負の値を期待）
+    
+    eta.cl ~ 0.1
+    eta.v1 ~ 0.3
+    eta.q ~ 0.4
+    eta.v2 ~ 0.3
+    
+    prop.err <- 0.2
+  })
+  
+  model({
+    # 体重とアルブミンによる共変量効果
+    cl <- exp(tcl) * (WT/70)^theta_wt_cl * (ALB/3.7)^theta_alb_cl * exp(eta.cl)
+    v1 <- exp(tv1 + eta.v1)
+    q <- exp(tq + eta.q)
+    v2 <- exp(tv2 + eta.v2)
+    
+    d/dt(central) = -cl/v1 * central - q/v1 * central + q/v2 * peripheral
+    d/dt(peripheral) = q/v1 * central - q/v2 * peripheral
+    
+    cp = central/v1
+    cp ~ prop(prop.err)
+  })
+}
+
+cat("体重+アルブミン共変量モデルをフィッティング中...\n")
+fit_cov_wt_alb <- nlmixr2(
+  model_cov_wt_alb,
+  data = pk_data,
+  est = "saem",
+  limit = list(censor = "left"),
+  control = saemControl(nBurn = 200, nEm = 300, print = 50)
+)
+
+print(fit_cov_wt_alb$parFixed)
+print(fit_cov_wt_alb$objf)
+AIC(fit_cov_wt_alb)
+```
+
+## 4.4 共変量モデル比較
+
+```{r covariate-comparison}
+# AIC比較
+aic_base <- AIC(fit_2cpt)
+aic_alb <- AIC(fit_cov_alb)
+aic_wt_alb <- AIC(fit_cov_wt_alb)
+# aic_wt_sex <- AIC(fit_cov_wt_sex)
+
+comparison_table <- data.frame(
+  Model = c("ベースモデル（共変量なし）", 
+            "アルブミンのみ", 
+            "体重 + アルブミン"), 
+            # "体重 + 性別"),
+  # AIC = round(c(aic_base, aic_wt, aic_wt_alb, aic_wt_sex), 1),
+  # delta_AIC = round(c(aic_base, aic_wt, aic_wt_alb, aic_wt_sex) - aic_base, 1)
+  AIC = round(c(aic_base, aic_alb, aic_wt_alb), 1),
+  delta_AIC = round(c(aic_base, aic_alb, aic_wt_alb) - aic_base, 1)
+)
+
+print(comparison_table)
+
+cat("\n=== 最良モデル ===\n")
+best_idx <- which.min(comparison_table$AIC)
+cat(comparison_table$Model[best_idx], "\n")
+```
+
+**解釈**:
+
+-   eta.CLと相関がみられたアルブミン、体重をCLの共変量に組み込んだが、ベースモデルよりもAICの改善は見られなかった
+-   このデータセットの個体間差＋残差を超える変動をアルブミン、体重で説明することはできなかった
+-   さらなる共変量探索が求められる可能性
+
+------------------------------------------------------------------------
+
+# 5. 最終モデルの評価
+
+```{r final-model}
+# 最終モデル = 2コンパートメントモデル
+final_model <- fit_2cpt
+
+cat("=== 最終モデルパラメータ推定値 ===\n")
+print(final_model$parFixed)
+
+```
+
+## 5.1 診断プロット
+
+```{r final-diagnostic, fig.width=10, fig.height=8}
+# plot(final_model)
+cat("=== Visual Predictive Check（VPC）プロット ===\n")
+vpc <- vpcPlot(final_model, n = 500, show=list(obs_dv=TRUE), log_y = TRUE, log_y_min = 0.1,
+        bins = pk_data %>% select(TIME) %>% distinct %>% pull,
+        xlab = "Time (h)", ylab = expression("Concentration (" * mu * "g/mL)"))
+
+print(vpc)
+
+vpc + 
+  ggplot2:::labs(subtitle = "VPC plot (0 to 168 hour)") +
+  ggplot2:::limits(c(0, 168), var = "x")
+
+vpc + 
+  ggplot2:::labs(subtitle = "VPC plot (336 to 2184 hour)") +
+  ggplot2:::limits(c(336, 2184), var = "x")
+
+vpc + 
+  ggplot2:::labs(subtitle = "VPC plot (2520 to 2688 hour)") +
+  ggplot2:::limits(c(2520, 2688), var = "x")
+
+```
+
+## 5.2 個別フィット（一部の被験者）
+
+```{r individual-fit, fig.width=12, fig.height=8}
+# 予測値を含むデータフレーム
+pred_data <- as.data.frame(final_model) %>%
+  filter(EVID == 0)
+
+# 4名の被験者をランダムに選択
+set.seed(42)
+sample_ids <- sample(unique(pred_data$ID), 4)
+
+sample_data <- pred_data %>%
+  filter(ID %in% sample_ids) %>%
+  # select(!c(ALB, WT)) %>%
+  # left_join(covariates, by = "ID")
+  left_join(covariates %>% mutate(ID = as.factor(ID)), by = "ID")
+
+ggplot(sample_data, aes(x = TIME/24)) +
+  geom_point(aes(y = DV), size = 2, color = "black") +
+  geom_line(aes(y = IPRED, color = "Individual prediction"), linewidth = 1) +
+  geom_line(aes(y = PRED, color = "Population prediction"), linewidth = 1, linetype = "dashed") +
+  scale_y_log10() +
+  facet_wrap(~ paste0("ID ", ID, " (", SEX, ", ", round(WT, 0), "kg, ALB ", ALB, ")"),
+             scales = "free_y", ncol = 2) +
+  scale_color_manual(values = c("Individual prediction" = "steelblue", "Population prediction" = "coral")) +
+  labs(
+    x = "Time (Day)",
+    y = expression("Concentration (" * mu * "g/mL)"),
+    color = "",
+    title = "Examples of individual fittings"
+  ) +
+  theme(legend.position = "top")
+```
+
+## 5.3 共変量効果の可視化（体重＋アルブミンがCLの共変量だった場合）
+
+```{r covariate-effect, fig.width=10, fig.height=5}
+# パラメータ推定値取得
+theta_wt <- fit_cov_wt_alb$parFixed["theta_wt_cl", "Est."] %>% as.numeric
+theta_alb <- fit_cov_wt_alb$parFixed["theta_alb_cl", "Est."] %>% as.numeric
+
+# 体重の効果
+wt_range <- seq(30, 150, by = 1)
+cl_wt_effect <- (wt_range/70)^theta_wt
+
+p_wt <- ggplot(data.frame(WT = wt_range, Effect = cl_wt_effect), 
+               aes(x = WT, y = Effect)) +
+  geom_line(linewidth = 1.2, color = "steelblue") +
+  geom_hline(yintercept = 1, linetype = "dashed") +
+  labs(
+    x = "Weight (kg)",
+    y = "Relative effect on CL",
+    title = paste0("Effect of weight (the exponent = ", round(theta_wt, 2), ")")
+  )
+
+# アルブミンの効果
+alb_range <- seq(2.5, 4.5, by = 0.1)
+cl_alb_effect <- (alb_range/4.0)^theta_alb
+
+p_alb <- ggplot(data.frame(ALB = alb_range, Effect = cl_alb_effect),
+                aes(x = ALB, y = Effect)) +
+  geom_line(linewidth = 1.2, color = "coral") +
+  geom_hline(yintercept = 1, linetype = "dashed") +
+  labs(
+    x = "Albumin (g/dL)",
+    y = "Relative effect on CL",
+    title = paste0("Effect of albumin (the exponent = ", round(theta_alb, 2), ")")
+  )
+
+p_wt | p_alb
+```
+
+**解釈**:
+
+-   体重のべき乗数が約0.4 → 固定用量投与を支持（アロメトリック予測0.75よりはるかに小さい）
+-   アルブミンが低いとCLが増加 → 疾患重症度がクリアランスに影響
+
+## 5.4 パラメータ推定値の可視化（体重＋アルブミンがCLの共変量だった場合）
+
+```{r parameter-forest, fig.width=8, fig.height=6}
+
+# パラメータデータフレームから信頼区間を取り出す関数
+extract_ci <- function(df, row, col) {
+  x <- as.character(df[row, col])
+
+  nums <- regmatches(
+    x,
+    gregexpr("[-+]?[0-9]*\\.?[0-9]+", x)
+  )[[1]]
+
+  if (length(nums) < 3) {
+    stop("指定したセルに 'estimate (lower, upper)' 形式の文字列がありません")
+  }
+
+  list(
+    estimate = as.numeric(nums[1]),
+    lower    = as.numeric(nums[2]),
+    upper    = as.numeric(nums[3])
+  )
+}
+
+# 固定効果パラメータ
+params <- as.data.frame(fit_cov_wt_alb$parFixed)
+params$Parameter <- rownames(params)
+
+# 共変量効果のみ抽出
+cov_params <- params[grepl("theta", params$Parameter), ]
+
+estimate_ci <- 
+  cbind(
+    c('theta_wt_cl', 'theta_alb_cl') %>% as.data.frame,
+    rbind(
+      extract_ci(cov_params, 1, 5) %>% unlist %>% as.data.frame %>% t,
+      extract_ci(cov_params, 2, 5) %>% unlist %>% as.data.frame %>% t
+      )
+    ) %>%
+  rename('Parameter' = '.')
+
+cov_params <- cov_params %>% 
+  left_join(estimate_ci) %>%
+  rename(covariate = Parameter) %>%
+  mutate(covariate = case_when(
+    covariate == 'theta_wt_cl' ~ 'WT',
+    covariate == 'theta_alb_cl' ~ 'ALB'
+  ))
+
+ggplot(cov_params, aes(x = estimate, y = covariate)) +
+  geom_point(size = 4) +
+  geom_errorbarh(aes(xmin = lower, 
+                     xmax = upper),
+                 height = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  labs(
+    # x = "推定値",
+    # y = "",
+    # title = "共変量効果の推定値（95%信頼区間）"
+    x = "Estimates",
+    y = "",
+    title = "Estimates of covariate effects (95% Confidence Intervals)"
+  )
+```
+
+**解釈**:
+
+-   体重のべき乗数が約0.4かつ95%信頼区間が0を含む → クリアランスに対する体重の影響はマージナル
+-   アルブミンのべき乗数が約-0.5かつ95%信頼区間が0を含む → クリアランスに対する体重の影響はマージナル
+
+------------------------------------------------------------------------
+
+# まとめ
+
+本ハンズオンでは以下を学びました：
+
+1.  **データの可視化**: 血中濃度推移、共変量の相関
+2.  **ベースモデル構築**: 1-cpt vs 2-cpt モデル比較
+3.  **共変量探索**: 体重、アルブミンの影響評価
+4.  **最終モデル**: 共変量を含まない2コンパートメントモデル
+
+## 重要な知見
+
+-   2コンパートメントモデルがデータに適合
+-   体重のべき乗数が0.4程度 → **固定用量投与の妥当性を支持**
+-   体重、アルブミンはCLに有意な影響を与えなかった
+
+## 次のステップ（時間があれば）
+
+-   Bootstrap法による不確実性評価
+-   rxode2によるシミュレーション（用量最適化など）
+
+------------------------------------------------------------------------
+
+## セッション情報
+
+```{r session-info}
+sessionInfo()
+```
