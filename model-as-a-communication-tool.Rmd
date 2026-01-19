@@ -1,0 +1,888 @@
+---
+title: "Model-as-a-communication-tool"
+author: "Yoshihiro Kuroki"
+date: "2023-03-03"
+output: 
+  html_document:
+    fig_width: 11.2
+    fig_height: 6.3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(patchwork)
+library(nlmixr2)
+library(rxode2)
+library(palmerpenguins)
+library(GGally)
+#library(equatiomatic)
+library(PKNCA)
+library(ggPMX)
+library(broom)
+library(DiagrammeR)
+```
+
+## What is the model?
+
+### Palmer Penguins
+
+![This is not the model I am going to to talk about (copyright 旭山動物園)](data/159714544.jpg)
+
+### Palmer Penguins Dataset
+
+[![Palmer Penguins (Artwork by \@allison_horst)](data/penguins.png)](https://github.com/allisonhorst/palmerpenguins/blob/main/man/figures/lter_penguins.png)
+
+```{r palmer_penguins_at_a_grance, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+
+penguins
+```
+
+### Let's see correlations of data graphically
+
+```{r penguins_ggpairs, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+penguins %>% ggpairs
+
+```
+
+```{r penguins_subset, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+df_ping_reg <- penguins %>%
+  select(species, island, flipper_length_mm, body_mass_g)
+
+# scatter plot body mass vs flipper length
+ping1 <- df_ping_reg %>%
+  ggplot(mapping = aes(x = body_mass_g, y = flipper_length_mm)) +
+  geom_point() +
+  labs(
+    title = "Body mass vs Flipper length",
+    subtitle = "Scatter plot",
+    x = "Body mass (g)",
+    y = "Flipper length (mm)"
+  ) +
+  theme_classic()
+
+print(ping1)
+
+# scatter plot + linear regression line
+
+ping2 <- ping1 + geom_smooth(method = 'lm', se = F)
+
+print(ping2)
+
+```
+
+#### Boared or excited?
+
+```{r boaring, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+penguins %>%
+  ggplot(aes(x = bill_depth_mm, y = bill_length_mm)) +
+  geom_hline(yintercept = 45, color = 'blue') +
+  labs(title = "Boaring, isn't it?") +
+  theme_void()
+
+penguins %>%
+  ggplot(mapping = aes(x = body_mass_g, y = flipper_length_mm)) +
+  geom_point(color = 'white') +
+  geom_smooth(method = 'lm', se = F) +
+  labs(title = "Exciting, isn't it?") +
+  theme_void()
+
+```
+
+### Let's do linear regression and see methematical expression of correlation body weight vs flipper length
+
+```{r show_equation_ping_mod1, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# fit lm model
+ping_mod1 <- lm(flipper_length_mm ~ body_mass_g, data = df_ping_reg)
+summary(ping_mod1)
+
+# show the model equation
+#extract_eq(ping_mod1, use_coefs = F)
+#extract_eq(ping_mod1, use_coefs = T)
+
+```
+
+### Let's see correlations of data graphically again
+
+```{r fit_model, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+
+# scatter plot body mass vs flipper length + island?
+ping3 <- df_ping_reg %>%
+  ggplot(mapping = aes(x = body_mass_g, y = flipper_length_mm, group = island)) +
+  geom_point(aes(color = island)) +
+  labs(
+    title = "Body mass vs Flipper length by island?",
+    subtitle = "Scatter plot",
+    x = "Body mass (g)",
+    y = "Flipper length (mm)"
+  ) +
+  theme_classic()
+
+print(ping3)
+
+# scatter plot body mass vs flipper length + species?
+ping4 <- df_ping_reg %>%
+  ggplot(mapping = aes(x = body_mass_g, y = flipper_length_mm, group = species)) +
+  geom_point(aes(color = species)) +
+  labs(
+    title = "Body mass vs Flipper length by species?",
+    subtitle = "Scatter plot",
+    x = "Body mass (g)",
+    y = "Flipper length (mm)"
+  ) +
+  theme_classic()
+
+print(ping4)
+
+```
+
+### Let's do linear regression and see methematical expression of correlation body weight vs flipper length again
+
+```{r fit_model_more, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# fit lm model
+ping_mod2 <- lm(flipper_length_mm ~ body_mass_g + island, data = df_ping_reg)
+summary(ping_mod2)
+
+# fit lm model
+ping_mod3 <- lm(flipper_length_mm ~ body_mass_g + species, data = df_ping_reg)
+summary(ping_mod3)
+
+# add regression line to ping4
+ping5 <- ping4 + geom_smooth(method = 'lm', se = F)
+
+print(ping5)
+
+# show the model equation
+#extract_eq(ping_mod3, use_coefs = F)
+#extract_eq(ping_mod3, use_coefs = T)
+
+
+```
+
+## 'Pharmacokinetic' Model ... finally ...
+
+### Dataset Theophylline
+
+```{r theo_sd}
+
+theo1 <- theo_sd %>%
+  mutate(ID = as.factor(ID)) %>%
+  ggplot(aes(x = TIME, y = DV)) +
+  geom_line(mapping = aes(color = ID)) +
+  labs(
+    title = 'Dataset Theophylline',
+    subtitle = 'Linear scale'
+  ) +
+  theme_classic()
+
+print(theo1)
+
+theo2 <- theo1 + 
+  labs(
+    title = 'Dataset Theophylline',
+    subtitle = 'Log-linear scale'
+  ) +
+  scale_y_log10()
+
+print(theo2)
+
+theo3 <- theo_sd %>%
+  ggplot(aes(x = TIME, y = DV)) +
+  geom_point() +
+  geom_smooth(method = 'loess', se = F) +
+  scale_y_log10() +
+  labs(
+    title = 'Dataset Theophylline',
+    subtitle = 'What kind of line/curve can be fitted to the data?'
+  ) +
+  theme_classic()
+
+print(theo3)
+
+```
+
+### Compartment model
+
+```{r one_cmp_model_diagram}
+
+grViz("
+
+  digraph one_compartment_model {
+
+    graph [
+      label = '1-compartment model\n\n'
+      labelloc = t
+      fontsize = 15
+      fontname = Helvetica
+    ]
+    
+    node [
+      shape = box
+      fontname = Helvetica
+      fontsize = 10
+    ]
+    depot [label = 'Amount (A1) * F\n\nExtravascular\nAdministration\n(e.g. sc, oral)']
+    central [label = 'Amount (A2)\n\nCentral\nCompartment\n\nVc']
+
+    node [
+      shape = plaintext
+      fontname = Helvetica
+      fontsize = 10
+    ]
+    iv [label = 'Amount (A1)\n\nIntravascular\nAdministration\n(e.g. bolus, infusion)']
+    elimination
+
+    edge [
+      arrowsize = 0.5
+      arrowhead = normal
+      labeldistance = 3
+      fontsize = 10
+    ]
+    iv->central;
+    depot->central [label = ka];
+    central->elimination [label = 'kel (= CL/V)']
+    {rank = same; depot; central}
+    {rank = sink; elimination}
+  
+  }
+  
+")
+
+```
+
+#### Differential Equations
+
+$$
+dA1/dt = -ka{\times}A1\\
+dA2/dt =  ka{\times}A1 - kel{\times}A2\\
+kel = CL/Vc\\
+Concentration = A2/Vc
+$$
+
+#### Simulation of concentration - time curve by 1-compartment model
+
+```{r cmt_model_simulation, echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+## base model
+mod_base <- rxode2({
+  tka <- 0.464
+  tcl <- 1.01 
+  tv <- 3.46
+  ka <- exp(tka)
+  cl <- exp(tcl)
+  v <- exp(tv)
+  C2 = centr / v
+  d/dt(depot) = - ka * depot;
+  d/dt(centr) =   ka * depot - cl * C2;
+  d/dt(AUC)   = centr / v
+})
+
+## ka 1/3
+mod_down_ka <- rxode2({
+  tka <- 0.464
+  tcl <- 1.01 
+  tv <- 3.46
+  ka <- exp(tka) * 1/3
+  cl <- exp(tcl)
+  v <- exp(tv)
+  C2 = centr / v
+  d/dt(depot) = - ka * depot;
+  d/dt(centr) =   ka * depot - cl * C2;
+  d/dt(AUC)   = centr / v
+})
+
+## cl 1/3
+mod_down_cl <- rxode2({
+  tka <- 0.464
+  tcl <- 1.01 
+  tv <- 3.46
+  ka <- exp(tka)
+  cl <- exp(tcl) * 1/3
+  v <- exp(tv)
+  C2 = centr / v
+  d/dt(depot) = - ka * depot;
+  d/dt(centr) =   ka * depot - cl * C2;
+  d/dt(AUC)   = centr / v
+})
+
+## v 1/3
+mod_down_v <- rxode2({
+  tka <- 0.464
+  tcl <- 1.01 
+  tv <- 3.46
+  ka <- exp(tka)
+  cl <- exp(tcl)
+  v <- exp(tv) * 1/3
+  C2 = centr / v
+  d/dt(depot) = - ka * depot;
+  d/dt(centr) =   ka * depot - cl * C2;
+  d/dt(AUC)   = centr / v
+})
+
+
+# Start a new simulation
+ev <- eventTable(amount.units = "mg", time.units = "hour") %>%
+  add.dosing(dose = 320, nbr.doses = 1L, dosing.interval = 24) %>%
+  add.sampling(seq(0, 24, 0.25))
+
+sim_base <- rxSolve(mod_base, ev)
+sim_down_ka <- rxSolve(mod_down_ka, ev)
+sim_down_cl <- rxSolve(mod_down_cl, ev)
+sim_down_v <- rxSolve(mod_down_v, ev)
+
+df_scenarios <- bind_rows(
+  sim_base %>% mutate(scenario = 'base-case'),
+  sim_down_ka %>% mutate(scenario = 'ka_1/3_lower'),
+  sim_down_v %>% mutate(scenario = 'v_1/3_lower'),
+  sim_down_cl %>% mutate(scenario = 'cl_1/3_lower')
+)
+
+sim_scenarios <- df_scenarios %>%
+  ggplot(mapping = aes(x = time, y = C2, group = scenario)) +
+  geom_line(aes(color = scenario)) +
+  labs(
+    title = 'Simulation',
+    subtitle = 'Different scenarios',
+    x = "Time (hr)", 
+    y = "Concentrations"
+  ) +
+  theme_classic()
+
+sim_scenarios2 <- sim_scenarios + scale_y_log10()
+
+print(sim_scenarios)
+print(sim_scenarios2)
+
+```
+
+```{r overlaying_theo_sd}
+
+theo_onecmt <- df_scenarios %>%
+  filter(scenario == 'base-case') %>%
+  ggplot(mapping = aes(x = time, y = C2)) +
+  geom_line() +
+  geom_point(data = theo_sd, mapping = aes(x = TIME, y = DV)) +
+  labs(
+    title = 'Theophylline PK data',
+    subtitle = 'Fitting one-compartment model',
+    x = "Time (hr)", 
+    y = "Concentrations"
+  ) +
+  theme_classic()
+
+theo_onecmt2 <- theo_onecmt + scale_y_log10()
+
+print(theo_onecmt)
+print(theo_onecmt2)
+```
+
+### Population Pharmacokinetic Model (popPK model)
+
+```{r poppk_concept_chart}
+
+# load fitted final model
+load(file = 'out/cmt1_mix_wtonvcl_fit.rds')
+
+# simulation df
+# event table with 12 individual subjects
+ev <- eventTable(amount.units = "mg", time.units = "hour") %>%
+  add.dosing(dose = 320, nbr.doses = 1L, dosing.interval = 24) %>%
+  add.sampling(seq(0, 24, 0.25)) %>%
+  et(id = 1:12)
+
+set.seed(20230302)
+sim_pop <- rxSolve(
+  cmt1_mix_wtonvcl_fit$ui, 
+  ev, 
+  iCov = theo_sd %>% select(ID, WT) %>% distinct %>% rename(id = ID),
+  nStud=10000
+  )
+
+predQ <- function(sim){
+  df <- sim %>%
+    group_by(time) %>%
+    summarise(
+      p05 = quantile(sim, probs = c(0.05)),
+      p50 = quantile(sim, probs = c(0.5)),
+      p90 = quantile(sim, probs = c(0.9))
+    )
+  return(df)
+}
+
+df_sim_pop <- predQ(sim = sim_pop)
+df_annotation <- df_sim_pop %>%
+  filter(time %in% c(3, 9, 16)) %>%
+  select(!p50) %>%
+  mutate(p05 = p05 + c(-0.9, -0.7, 0.8)) %>%
+  mutate(p90 = p90 + c(0.9, -0.8, 0.8))
+
+df_sim_pop %>%
+  ggplot() +
+  geom_line(aes(x = time, y = p50)) +
+  geom_line(aes(x = time, y = p05), linetype = 'dashed') +
+  geom_line(aes(x = time, y = p90), linetype = 'dashed') +
+  geom_point(data=df_annotation, aes(x = time, y = p05), shape = 4, size = 3) +
+  geom_point(data=df_annotation, aes(x = time, y = p90), shape = 4, size = 3) +
+  annotate(
+    geom = "segment", 
+    x = 4.75, xend = 4.75, y = 4.29, yend = 6.74, 
+    arrow = arrow(ends = 'both', angle = 25, length = unit(3, 'mm'))
+    ) +
+  annotate(
+    geom = "segment", 
+    x = 4.75, xend = 4.75, y = 6.74, yend = 9.08, 
+    arrow = arrow(ends = 'both', angle = 25, length = unit(3, 'mm'))
+    ) +
+  annotate(geom = "text", x = 4, y = (4.29+6.74)/2, label = 'eta') +
+  annotate(geom = "text", x = 4, y = (6.74+9.08)/2, label = 'eta') +
+  annotate(
+    geom = "segment", 
+    x = c(3, 9, 16), xend = c(3, 9, 16), 
+    y = c(9.9, 6.91, 4.29), yend = c(10.8, 6.11, 5.09), 
+    arrow = arrow(ends = 'both', angle = 25, length = unit(1.5, 'mm'))
+    ) +
+  annotate(
+    geom = "segment", 
+    x = c(3, 9, 16), xend = c(3, 9, 16), 
+    y = c(4.82, 2.78, 1.22), yend = c(3.92, 2.08, 2.02), 
+    arrow = arrow(ends = 'both', angle = 25, length = unit(1.5, 'mm'))
+    ) +
+  annotate(
+    geom = "text", x = c(3, 9, 16), 
+    y = c(10.8+0.5, 6.91+0.5, 5.09+0.5), label = 'epsilon'
+    ) +
+  annotate(
+    geom = "text", x = c(3, 9, 16), 
+    y = c(3.92-0.5, 2.08-0.5, 1.22-0.5), label = 'epsilon'
+    ) +
+  labs(
+    title = 'Concept of variability in population PK model',
+    subtitle = 'Inter-individual variability (IIV, eta) and intra-individual variability (epsilon)',
+    x = 'Time',
+    y = 'Concentration'
+  ) +
+  annotate(
+    geom = "text", x = 25, y = 10, 
+    label = 'center of PK profile is given by the parameters (ka, V, CL)\ninter-individual variability is given by the parameters (etas for ka, V, CL)\nand intra-individual variability is given by the parameter (epsilon)',
+    hjust = 1, vjust = 1) +
+  theme_classic()
+
+```
+
+#### Population Pharmacokinetic Model for theophylline
+
+```{r theophylline_poppk, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# load fitted final model
+load(file = 'out/cmt1_mix_wtonvcl_fit.rds')
+
+# simulation df
+# event table with 12 individual subjects
+ev <- eventTable(amount.units = "mg", time.units = "hour") %>%
+  add.dosing(dose = 320, nbr.doses = 1L, dosing.interval = 24) %>%
+  add.sampling(seq(0, 24, 0.25)) %>%
+  et(id = 1:12)
+
+set.seed(20230302)
+sim_pop <- rxSolve(
+  cmt1_mix_wtonvcl_fit$ui, 
+  ev, 
+  iCov = theo_sd %>% select(ID, WT) %>% distinct %>% rename(id = ID),
+  nStud=10000
+  )
+
+pred95 <- function(sim){
+  df <- sim %>%
+    group_by(time) %>%
+    summarise(
+      p025 = quantile(sim, probs = c(0.025)),
+      p500 = quantile(sim, probs = c(0.5)),
+      p975 = quantile(sim, probs = c(0.975))
+    )
+  return(df)
+}
+
+df_sim_fmd <- pred95(sim = sim_pop)
+
+g_ppk <- df_sim_fmd %>%
+  ggplot(mapping = aes(x = time, y = p500)) +
+  geom_ribbon(mapping = aes(ymin = p025, ymax = p975), fill = 'grey70') +
+  geom_line() +
+  labs(
+    title = 'Population pharmacokinetic model of theophylline',
+    subtitle = 'Linear scale',
+    caption = 'Solid line presents 50%ile prediction\nShaded area presents 2.5%ile - 97.5%ile prediction interval',
+    x = "Time (hr)", 
+    y = "Concentrations"
+  ) +
+  theme_classic()
+
+g_ppk + geom_point(data = theo_sd, mapping = aes(x = TIME, y = DV))
+g_ppk + geom_point(data = theo_sd, mapping = aes(x = TIME, y = DV)) + scale_y_log10()
+
+```
+
+#### Simulation of weight effect on exposure
+
+```{r poppk_weight_scenarios, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# if mean weight = 40 (sd = 10)
+bw40 <- rxSolve(
+  cmt1_mix_wtonvcl_fit$ui, 
+  ev, 
+  iCov = data.frame(id = 1:12, WT = rnorm(12, 40, 10)),
+  #  nSub=100, 
+  nStud=2500
+)
+
+# if mean weight = 70 (sd = 10)
+bw70 <- rxSolve(
+  cmt1_mix_wtonvcl_fit$ui, 
+  ev, 
+  iCov = data.frame(id = 1:12, WT = rnorm(12, 70, 10)),
+  #  nSub=100, 
+  nStud=2500
+)
+
+# if mean weight = 100 (sd = 10)
+bw100 <- rxSolve(
+  cmt1_mix_wtonvcl_fit$ui, 
+  ev, 
+  iCov = data.frame(id = 1:12, WT = rnorm(12, 100, 10)),
+  #  nSub=100, 
+  nStud=2500
+)
+
+pred95 <- function(sim){
+  df <- sim %>%
+    group_by(time) %>%
+    summarise(
+      p025 = quantile(sim, probs = c(0.025)),
+      p500 = quantile(sim, probs = c(0.5)),
+      p975 = quantile(sim, probs = c(0.975))
+    )
+  return(df)
+}
+
+df_bw_sim <- bind_rows(
+  pred95(sim = bw40) %>% mutate(weight = 'bw040'),
+  pred95(sim = bw70)  %>% mutate(weight = 'bw070'),
+  pred95(sim = bw100)  %>% mutate(weight = 'bw100')
+)
+  
+sim_lin <- df_bw_sim %>%
+  ggplot(mapping = aes(x = time, y = p500)) +
+  geom_ribbon(mapping = aes(ymin = p025, ymax = p975), fill = 'grey70') +
+  geom_line() +
+  facet_grid(cols = vars(weight)) +
+  labs(
+    title = 'Simulation of effect of weight',
+    subtitle = 'Scenarios: 40 kg, 70 kg, 100 kg, dose = 320 mg',
+    x = "Time (hr)", 
+    y = "Concentrations"
+  ) +
+  theme_classic()
+
+sim_log <- sim_lin + scale_y_log10()
+
+sim_lin / sim_log
+
+```
+
+#### Simulation of steady state exposure
+
+```{r poppk_ss_simulation}
+
+# simulate steady state 400 mg OD
+ev2 <- eventTable(amount.units = "mg", time.units = "hour") %>%
+  add.dosing(dose = 400, nbr.doses = 7L, dosing.interval = 24) %>%
+  add.sampling(seq(0, 24 * 7, 0.5)) %>%
+  et(id = 1:12)
+
+simss <- rxSolve(
+  cmt1_mix_wtonvcl_fit$ui, 
+  ev2, 
+  iCov = data.frame(id = 1:12, WT = rnorm(12, 70, 10)),
+  nStud=10000
+)
+
+pred_simss <- pred95(sim = simss)
+
+sslin <- pred_simss %>%
+  ggplot(mapping = aes(x = time, y = p500)) +
+  geom_ribbon(mapping = aes(ymin = p025, ymax = p975), fill = 'grey70') +
+  geom_line() +
+  geom_hline(yintercept = c(5, 15), linetype = 'dashed') +
+  labs(
+    title = 'Simulation of steady state exposure',
+    subtitle = 'Scenarios: 400 mg once daily for 7 days',
+    caption = 'Dashed lines represent therapeutic range of 5 to 15 mg/L',
+    x = "Time (hr)", 
+    y = "Concentrations"
+  ) +
+  theme_classic()
+
+show(sslin)
+
+```
+
+### Physiologically-Based Pharmacokinetic (PBPK) Model
+
+![Schematic diagram of PBPK model for theophylline](data/psp412787-fig-0003-m.png)
+
+```{r pbpk_overview, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Population PBPK modeling using parametric and nonparametric methods of the
+# Simcyp Simulator, and Bayesian samplers
+# Janak R. Wedagedera, Anthonia Afuape, Siri Kalyan Chirumamilla, Hiroshi
+# Momiji, Robert Leary, Mike Dunlavey, Richard Matthews, Khaled Abduljalil,
+# Masoud Jamei, Frederic Y. Bois
+# 10.1002/psp4.12787
+# https://onlinelibrary.wiley.com/doi/10.1002/psp4.12787
+
+theopbpk <- read_csv("data/theopbpk.csv") %>% 
+  select(1:5) %>%
+  rename(
+    WT = Wt,
+    AMT = Dose,
+    TIME = Time,
+    DV = Conc
+  ) %>%
+  mutate(
+    id = Subject %>% as.factor, 
+    Dose = if_else(
+      is.na(AMT),
+      320,
+      WT * AMT
+    )
+  )
+
+pbpkmod <-rxode2({
+  
+  BP       = 0.815 # Blood to plasma partition coefficient
+  Kpliv    = 1 # Liver to plasma partition coefficient
+  fu       = 0.5 # Fraction of unbound drug in plasma
+  MW       = 180.167 # g/mole for theophylline
+  fa       = 1 # Fraction absorbed
+  Ka       = 2.66 * exp(eta.ka) # First order absorption rate with eta (NPAG)
+  fg       = 1 # Fraction escaping gut metabolism
+  Age      = 27.6 # Age in year
+  CLRh     = 0.31 # Renal clearance in healthy subjects in L/h
+  Creat    = 76.5 # Serum creatinine concentration
+  Vmax     = 10.0 * exp(eta.vmax) # Maximum rate of metabolism with eta (NPAG)
+  CYP1A2ab = 52 # CYP1A2 enzyme abundance in liver in pmol/mg protein
+  Km       = 377 # Michaelis-Menten coefficient
+  Dliv     = 1080 # Liver Density in g/L
+  Vss      = 0.445 * exp(eta.vss) # Volume of distribution at steady state with eta (NPAG)
+  MPPGL    = 39.79 # Microsomal protein per gram of liver
+  
+  Cpl     = (MW*Csys)/(1000*BP)
+  Ht      = 175.32 + 0.113*Age - 0.0025*Age^2
+  BM      = exp(2.643 + 0.0099*Ht) # body mass (kg) (positive values given by the user are used)
+  BSA     = 0.00718 * BM^0.425 * Ht^0.725
+  CO      = BSA*60*(3 - 0.01 * (Age-20)) # cardiac output
+  Qpv     = CO * 0.196 # the portal vein blood flow in L/h
+  Qha     = CO * 0.065 # the hepatic artery blood flow in L/h
+  Qh      = Qha + Qpv # the total hepatic blood flow in L/h
+  Cpv     = Csys + (fa*Ka*fg*Dose*exp(-Ka*time))/Qpv
+  Vliv    = 0.722 * BSA^1.176 # the physical volume of the liver in L
+  Vsys    = Vss*BM - (Kpliv*Vliv)/BP # the apparent volume of of the systemic compartmen in L
+  GFR     = (140-Age) * (BM/(0.814*Creat)) * (1.73/BSA)
+  RF      = GFR/130
+  CLR     = RF * CLRh
+  Wliv    = Vliv * Dliv
+  CluintH = (Vmax*CYP1A2ab*MPPGL*Wliv*6e-5)/(Km+(Cliv*fu/Kpliv))
+  
+  # systemic compartment Csys ODE
+  d/dt(Csys) = 1/Vsys * (Qh * (Cliv*BP)/Kpliv - Qh*Csys - CLR * Csys/BP);
+  # liver comparment Cliv ODE
+  d/dt(Cliv) = 1/Vliv * (Qpv * Cpv - Qh * (Cliv*BP)/Kpliv + Qha*Csys - (fu*CluintH*Cliv*BP)/Kpliv);
+  
+})
+
+set.seed(20230302)
+
+# event table with 18 individual subjects
+ev <- eventTable(amount.units = "mg", time.units = "hour") %>%
+  add.dosing(dose = 320, nbr.doses = 1L, dosing.to = 'Cpv') %>%
+  add.sampling(seq(0, 24, length.out = 100)) %>%
+  et(id = 1:18)
+
+omega <- lotri(eta.ka + eta.vss + eta.vmax ~ c(
+  0.490,
+  -0.073, 0.022,
+  -0.075, 0.034, 0.065)
+  )
+
+fit <- rxSolve(
+  pbpkmod,
+  ev,
+  omega=omega,
+  iCov = theopbpk %>% select(id, Dose) %>% distinct,
+  nStud = 10000
+)
+
+pbpk95 <- function(sim){
+  BP = 0.815
+  df <- sim %>%
+    select(time, Csys) %>%
+    mutate(Conc = Csys/BP) %>%
+    group_by(time) %>%
+    summarise(
+      p025 = quantile(Conc, probs = c(0.025)),
+      p500 = quantile(Conc, probs = c(0.5)),
+      p975 = quantile(Conc, probs = c(0.975))
+    )
+  return(df)
+}
+
+p1 <- pbpk95(fit) %>%
+  ggplot(mapping = aes(x = time, y = p500)) +
+  geom_ribbon(mapping = aes(ymin = p025, ymax = p975), fill = 'grey70') +
+  geom_line() +
+  geom_point(data = nlmixr2data::theo_sd, mapping = aes(x = TIME, y = DV)) +
+  labs(
+    title = 'PBPK model for theophylline',
+    subtitle = 'Linear scale',
+    x = "Time (hr)", 
+    y = "Concentrations"
+  ) +
+  theme_classic()
+
+p2 <- p1 + scale_y_log10() +
+  labs(
+    title = 'PBPK model for theophylline',
+    subtitle = 'Log-linear scale',
+    x = "Time (hr)", 
+    y = "Concentrations"
+  )
+  
+show(p1)
+show(p2)
+
+```
+
+#### Simulation of inhibition of CYP1A2
+
+```{r pbpk_sim_cyp1a2, echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+theopbpk <- read_csv("data/theopbpk.csv") %>% 
+  select(1:5) %>%
+  rename(
+    WT = Wt,
+    AMT = Dose,
+    TIME = Time,
+    DV = Conc
+  ) %>%
+  mutate(
+    id = Subject %>% as.factor, 
+    Dose = if_else(
+      is.na(AMT),
+      320,
+      WT * AMT
+    )
+  )
+
+cyp1a2 <-rxode2({
+  
+  BP       = 0.815 # Blood to plasma partition coefficient
+  Kpliv    = 1 # Liver to plasma partition coefficient
+  fu       = 0.5 # Fraction of unbound drug in plasma
+  MW       = 180.167 # g/mole for theophylline
+  fa       = 1 # Fraction absorbed
+  Ka       = 2.66 * exp(eta.ka) # First order absorption rate with eta (NPAG)
+  fg       = 1 # Fraction escaping gut metabolism
+  Age      = 27.6 # Age in year
+  CLRh     = 0.31 # Renal clearance in healthy subjects in L/h
+  Creat    = 76.5 # Serum creatinine concentration
+  Vmax     = 1 * exp(eta.vmax) # Maximum rate of metabolism with eta (NPAG)
+  CYP1A2ab = 52 # CYP1A2 enzyme abundance in liver in pmol/mg protein
+  Km       = 377 # Michaelis-Menten coefficient
+  Dliv     = 1080 # Liver Density in g/L
+  Vss      = 0.445 * exp(eta.vss) # Volume of distribution at steady state with eta (NPAG)
+  MPPGL    = 39.79 # Microsomal protein per gram of liver
+  
+  Cpl     = (MW*Csys)/(1000*BP)
+  Ht      = 175.32 + 0.113*Age - 0.0025*Age^2
+  BM      = exp(2.643 + 0.0099*Ht) # body mass (kg) (positive values given by the user are used)
+  BSA     = 0.00718 * BM^0.425 * Ht^0.725
+  CO      = BSA*60*(3 - 0.01 * (Age-20)) # cardiac output
+  Qpv     = CO * 0.196 # the portal vein blood flow in L/h
+  Qha     = CO * 0.065 # the hepatic artery blood flow in L/h
+  Qh      = Qha + Qpv # the total hepatic blood flow in L/h
+  Cpv     = Csys + (fa*Ka*fg*Dose*exp(-Ka*time))/Qpv
+  Vliv    = 0.722 * BSA^1.176 # the physical volume of the liver in L
+  Vsys    = Vss*BM - (Kpliv*Vliv)/BP # the apparent volume of of the systemic compartmen in L
+  GFR     = (140-Age) * (BM/(0.814*Creat)) * (1.73/BSA)
+  RF      = GFR/130
+  CLR     = RF * CLRh
+  Wliv    = Vliv * Dliv
+  CluintH = (Vmax*CYP1A2ab*MPPGL*Wliv*6e-5)/(Km+(Cliv*fu/Kpliv))
+  
+  # systemic compartment Csys ODE
+  d/dt(Csys) = 1/Vsys * (Qh * (Cliv*BP)/Kpliv - Qh*Csys - CLR * Csys/BP);
+  # liver comparment Cliv ODE
+  d/dt(Cliv) = 1/Vliv * (Qpv * Cpv - Qh * (Cliv*BP)/Kpliv + Qha*Csys - (fu*CluintH*Cliv*BP)/Kpliv);
+  
+})
+
+set.seed(20230302)
+
+# event table with 18 individual subjects
+ev <- eventTable(amount.units = "mg", time.units = "hour") %>%
+  add.dosing(dose = 320, nbr.doses = 1L, dosing.to = 'Cpv') %>%
+  add.sampling(seq(0, 24, length.out = 100)) %>%
+  et(id = 1:18)
+
+omega <- lotri(eta.ka + eta.vss + eta.vmax ~ c(
+  0.490,
+  -0.073, 0.022,
+  -0.075, 0.034, 0.065)
+  )
+
+fit1a2 <- rxSolve(
+  cyp1a2,
+  ev,
+  omega=omega,
+  iCov = theopbpk %>% select(id, Dose) %>% distinct,
+  nStud = 10000
+)
+
+pbpk95 <- function(sim){
+  BP = 0.815
+  df <- sim %>%
+    select(time, Csys) %>%
+    mutate(Conc = Csys/BP) %>%
+    group_by(time) %>%
+    summarise(
+      p025 = quantile(Conc, probs = c(0.025)),
+      p500 = quantile(Conc, probs = c(0.5)),
+      p975 = quantile(Conc, probs = c(0.975))
+    )
+  return(df)
+}
+
+p3 <- pbpk95(fit1a2) %>%
+  ggplot(mapping = aes(x = time, y = p500)) +
+  geom_ribbon(mapping = aes(ymin = p025, ymax = p975), fill = 'grey70') +
+  geom_line() +
+  geom_point(data = nlmixr2data::theo_sd, mapping = aes(x = TIME, y = DV)) +
+  theme_classic()
+
+
+show(p1)
+show(p3)
+
+```
+
+```{r sessioninfo}
+sessionInfo()
+```
