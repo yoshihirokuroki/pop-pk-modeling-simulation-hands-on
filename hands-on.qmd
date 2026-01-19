@@ -23,6 +23,7 @@ library(ggplot2)
 library(GGally)
 library(patchwork)
 library(xpose.nlmixr2)
+library(DiagrammeR)
 
 # 日本語フォント設定（必要に応じて）
 theme_set(theme_bw(base_size = 12))
@@ -122,6 +123,148 @@ ggpairs(
 
 ## 3.1 1コンパートメントモデル
 
+### Compartment model
+
+```{r one_cmp_model_diagram}
+
+grViz("
+
+  digraph one_compartment_model {
+
+    graph [
+      label = '1-compartment model\n\n'
+      labelloc = t
+      fontsize = 15
+      fontname = Helvetica
+    ]
+    
+    node [
+      shape = box
+      fontname = Helvetica
+      fontsize = 10
+    ]
+    depot [label = 'Amount (A1) * F\n\nExtravascular\nAdministration\n(e.g. sc, oral)']
+    central [label = 'Amount (A2)\n\nCentral\nCompartment\n\nVc']
+
+    node [
+      shape = plaintext
+      fontname = Helvetica
+      fontsize = 10
+    ]
+    iv [label = 'Amount (A1)\n\nIntravascular\nAdministration\n(e.g. bolus, infusion)']
+    elimination
+
+    edge [
+      arrowsize = 0.5
+      arrowhead = normal
+      labeldistance = 3
+      fontsize = 10
+    ]
+    iv->central;
+    depot->central [label = ka];
+    central->elimination [label = 'kel (= CL/V)']
+    {rank = same; depot; central}
+    {rank = sink; elimination}
+  
+  }
+  
+")
+
+```
+
+### Population Pharmacokinetic Model (popPK model)
+
+```{r poppk_concept_chart}
+
+# load fitted final model
+load(file = 'data/cmt1_mix_wtonvcl_fit.rds')
+
+# simulation df
+# event table with 12 individual subjects
+ev <- eventTable(amount.units = "mg", time.units = "hour") %>%
+  add.dosing(dose = 320, nbr.doses = 1L, dosing.interval = 24) %>%
+  add.sampling(seq(0, 24, 0.25)) %>%
+  et(id = 1:12)
+
+set.seed(20230302)
+sim_pop <- rxSolve(
+  cmt1_mix_wtonvcl_fit$ui, 
+  ev, 
+  iCov = theo_sd %>% select(ID, WT) %>% distinct %>% rename(id = ID),
+  nStud=10000
+  )
+
+predQ <- function(sim){
+  df <- sim %>%
+    group_by(time) %>%
+    summarise(
+      p05 = quantile(sim, probs = c(0.05)),
+      p50 = quantile(sim, probs = c(0.5)),
+      p90 = quantile(sim, probs = c(0.9))
+    )
+  return(df)
+}
+
+df_sim_pop <- predQ(sim = sim_pop)
+df_annotation <- df_sim_pop %>%
+  filter(time %in% c(3, 9, 16)) %>%
+  select(!p50) %>%
+  mutate(p05 = p05 + c(-0.9, -0.7, 0.8)) %>%
+  mutate(p90 = p90 + c(0.9, -0.8, 0.8))
+
+df_sim_pop %>%
+  ggplot() +
+  geom_line(aes(x = time, y = p50)) +
+  geom_line(aes(x = time, y = p05), linetype = 'dashed') +
+  geom_line(aes(x = time, y = p90), linetype = 'dashed') +
+  geom_point(data=df_annotation, aes(x = time, y = p05), shape = 4, size = 3) +
+  geom_point(data=df_annotation, aes(x = time, y = p90), shape = 4, size = 3) +
+  annotate(
+    geom = "segment", 
+    x = 4.75, xend = 4.75, y = 4.29, yend = 6.74, 
+    arrow = arrow(ends = 'both', angle = 25, length = unit(3, 'mm'))
+    ) +
+  annotate(
+    geom = "segment", 
+    x = 4.75, xend = 4.75, y = 6.74, yend = 9.08, 
+    arrow = arrow(ends = 'both', angle = 25, length = unit(3, 'mm'))
+    ) +
+  annotate(geom = "text", x = 4, y = (4.29+6.74)/2, label = 'eta') +
+  annotate(geom = "text", x = 4, y = (6.74+9.08)/2, label = 'eta') +
+  annotate(
+    geom = "segment", 
+    x = c(3, 9, 16), xend = c(3, 9, 16), 
+    y = c(9.9, 6.91, 4.29), yend = c(10.8, 6.11, 5.09), 
+    arrow = arrow(ends = 'both', angle = 25, length = unit(1.5, 'mm'))
+    ) +
+  annotate(
+    geom = "segment", 
+    x = c(3, 9, 16), xend = c(3, 9, 16), 
+    y = c(4.82, 2.78, 1.22), yend = c(3.92, 2.08, 2.02), 
+    arrow = arrow(ends = 'both', angle = 25, length = unit(1.5, 'mm'))
+    ) +
+  annotate(
+    geom = "text", x = c(3, 9, 16), 
+    y = c(10.8+0.5, 6.91+0.5, 5.09+0.5), label = 'epsilon'
+    ) +
+  annotate(
+    geom = "text", x = c(3, 9, 16), 
+    y = c(3.92-0.5, 2.08-0.5, 1.22-0.5), label = 'epsilon'
+    ) +
+  labs(
+    title = 'Concept of variability in population PK model',
+    subtitle = 'Inter-individual variability (IIV, eta) and intra-individual variability (epsilon)',
+    x = 'Time',
+    y = 'Concentration'
+  ) +
+  annotate(
+    geom = "text", x = 25, y = 10, 
+    label = 'center of PK profile is given by the parameters (ka, V, CL)\ninter-individual variability is given by the parameters (etas for ka, V, CL)\nand intra-individual variability is given by the parameter (epsilon)',
+    hjust = 1, vjust = 1) +
+  theme_classic()
+
+```
+
 ```{r model-1cpt}
 # 1コンパートメントモデル定義
 model_1cpt <- function() {
@@ -172,6 +315,7 @@ fit_1cpt <- nlmixr2(
 # 結果表示
 print(fit_1cpt$parFixed)
 print(fit_1cpt$objf)
+AIC(fit_1cpt)
 ```
 
 ## 3.2 2コンパートメントモデル
@@ -230,6 +374,7 @@ fit_2cpt <- nlmixr2(
 
 print(fit_2cpt$parFixed)
 print(fit_2cpt$objf)
+AIC(fit_2cpt)
 ```
 
 ## 3.3 モデル比較

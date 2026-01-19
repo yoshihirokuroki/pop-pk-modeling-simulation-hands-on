@@ -18,12 +18,14 @@
 
 1.  [Posit Cloud](https://posit.cloud)にログイン
 2.  **New Project** → **New Project from Git Repository**
-3.  URL入力: `https://github.com/yourusername/nlmixr2-handson`
+3.  URL入力: <https://github.com/yoshihirokuroki/pop-pk-modeling-simulation-hands-on.git>
 4.  プロジェクトが開いたら、Consoleで実行:
 
 ``` r
 renv::restore()
 ```
+
+> 注意⚠️ Posit CloudはLinuxで運用されており、renv::restore()でパッケージをインストールするためにソースコードからビルドするので非常に時間を要します。特にパッケージ{RcppEigen}はPosit Cloudに合理的な時間内でインストールできるかわかりません。実用的なハンズオン環境の目処が立つまでお待ちください。
 
 ### 方法2: テンプレートから
 
@@ -65,7 +67,7 @@ nlmixr2-handson/
 
 ### データセット
 
--   **被験者数**: 16名（男女比1:1）
+-   **被験者数**: 24名（男女比10:14）
 -   **年齢範囲**: 35-85歳
 -   **体重範囲**: 30-150 kg
 -   **サンプリング**:
